@@ -1,13 +1,7 @@
 // Copyright (c) Corporation for National Research Initiatives
 package org.python.core;
 
-import java.io.BufferedReader;
-import java.io.Closeable;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.lang.ref.Reference;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
@@ -18,21 +12,23 @@ import java.net.URL;
 import java.net.URLDecoder;
 import java.nio.charset.Charset;
 import java.nio.charset.UnsupportedCharsetException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.security.AccessControlException;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedHashSet;
-import java.util.LinkedList;
-import java.util.Map;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.Properties;
-import java.util.Set;
-import java.util.StringTokenizer;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.logging.Logger;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 import jnr.posix.util.Platform;
 
@@ -69,6 +65,8 @@ public class PySystemState extends PyObject implements AutoCloseable,
     private static final String VFSZIP_PREFIX = "vfszip:";
     private static final String VFS_PREFIX = "vfs:";
 
+    private static Logger logger = Logger.getLogger(PySystemState.class.getName());
+
     public static final PyString version = new PyString(Version.getVersion());
 
     public static final PyTuple subversion = new PyTuple(new PyString("Jython"), Py.newString(""),
@@ -102,12 +100,12 @@ public class PySystemState extends PyObject implements AutoCloseable,
 
     public static final PyObject copyright = Py.newString(
             "Copyright (c) 2000-2015 Jython Developers.\n" + "All rights reserved.\n\n" +
-            "Copyright (c) 2000 BeOpen.com.\n" + "All Rights Reserved.\n\n" +
-            "Copyright (c) 2000 The Apache Software Foundation.\n" + "All rights reserved.\n\n" +
-            "Copyright (c) 1995-2000 Corporation for National Research Initiatives.\n"
-                + "All Rights Reserved.\n\n" +
-            "Copyright (c) 1991-1995 Stichting Mathematisch Centrum, Amsterdam.\n"
-                + "All Rights Reserved.");
+                    "Copyright (c) 2000 BeOpen.com.\n" + "All Rights Reserved.\n\n" +
+                    "Copyright (c) 2000 The Apache Software Foundation.\n" + "All rights reserved.\n\n" +
+                    "Copyright (c) 1995-2000 Corporation for National Research Initiatives.\n"
+                    + "All Rights Reserved.\n\n" +
+                    "Copyright (c) 1991-1995 Stichting Mathematisch Centrum, Amsterdam.\n"
+                    + "All Rights Reserved.");
 
     private static Map<String, String> builtinNames;
     public static PyTuple builtin_module_names = null;
@@ -129,7 +127,9 @@ public class PySystemState extends PyObject implements AutoCloseable,
 
     private static boolean initialized = false;
 
-    /** The arguments passed to this program on the command line. */
+    /**
+     * The arguments passed to this program on the command line.
+     */
     public PyList argv = new PyList();
 
     public PyObject modules;
@@ -174,10 +174,14 @@ public class PySystemState extends PyObject implements AutoCloseable,
 
     private codecs.CodecState codecState;
 
-    /** true when a SystemRestart is triggered. */
+    /**
+     * true when a SystemRestart is triggered.
+     */
     public boolean _systemRestart = false;
 
-    /** Whether bytecode should be written to disk on import. */
+    /**
+     * Whether bytecode should be written to disk on import.
+     */
     public boolean dont_write_bytecode = false;
 
     // Automatically close resources associated with a PySystemState when they get GCed
@@ -201,8 +205,8 @@ public class PySystemState extends PyObject implements AutoCloseable,
         importLock = new ReentrantLock();
         syspathJavaLoader = new SyspathJavaLoader(imp.getParentClassLoader());
 
-        argv = (PyList)defaultArgv.repeat(1);
-        path = (PyList)defaultPath.repeat(1);
+        argv = (PyList) defaultArgv.repeat(1);
+        path = (PyList) defaultPath.repeat(1);
         path.append(Py.newString(JavaImporter.JAVA_IMPORT_PATH_ENTRY));
         path.append(Py.newString(ClasspathPyImporter.PYCLASSPATH_PREFIX));
         executable = defaultExecutable;
@@ -278,14 +282,14 @@ public class PySystemState extends PyObject implements AutoCloseable,
         String encoding = registry.getProperty(PYTHON_IO_ENCODING);
         String errors = registry.getProperty(PYTHON_IO_ERRORS);
 
-        if (encoding==null) {
+        if (encoding == null) {
             // We still don't have an explicit selection for this: match the console.
             encoding = Py.getConsole().getEncoding();
         }
 
-        ((PyFile)stdin).setEncoding(encoding, errors);
-        ((PyFile)stdout).setEncoding(encoding, errors);
-        ((PyFile)stderr).setEncoding(encoding, "backslashreplace");
+        ((PyFile) stdin).setEncoding(encoding, errors);
+        ((PyFile) stdout).setEncoding(encoding, errors);
+        ((PyFile) stderr).setEncoding(encoding, "backslashreplace");
     }
 
     @Deprecated
@@ -451,7 +455,7 @@ public class PySystemState extends PyObject implements AutoCloseable,
         if (ts.tracefunc == null) {
             return Py.None;
         } else {
-            return ((PythonTraceFunction)ts.tracefunc).tracefunc;
+            return ((PythonTraceFunction) ts.tracefunc).tracefunc;
         }
     }
 
@@ -469,7 +473,7 @@ public class PySystemState extends PyObject implements AutoCloseable,
         if (ts.profilefunc == null) {
             return Py.None;
         } else {
-            return ((PythonTraceFunction)ts.profilefunc).tracefunc;
+            return ((PythonTraceFunction) ts.profilefunc).tracefunc;
         }
     }
 
@@ -496,7 +500,7 @@ public class PySystemState extends PyObject implements AutoCloseable,
 
     /**
      * Change the current working directory to the specified path.
-     *
+     * <p>
      * path is assumed to be absolute and canonical (via os.path.realpath).
      *
      * @param path a path String
@@ -526,7 +530,7 @@ public class PySystemState extends PyObject implements AutoCloseable,
 
     /**
      * Resolve a path. Returns the full path taking the current working directory into account.
-     *
+     * <p>
      * Like getPath but called statically. The current PySystemState is only consulted for the
      * current working directory when it's necessary (when the path is relative).
      *
@@ -561,7 +565,7 @@ public class PySystemState extends PyObject implements AutoCloseable,
      * trick to avoid getting the current state if the path is absolute. (Noted that this may be
      * needless optimisation.)
      *
-     * @param sys a <code>PySystemState</code> or null meaning the current one
+     * @param sys  a <code>PySystemState</code> or null meaning the current one
      * @param path a path <code>String</code>
      * @return a resolved <code>File</code>
      */
@@ -593,7 +597,7 @@ public class PySystemState extends PyObject implements AutoCloseable,
      * Note: in the context where we use this method, <code>path</code> is already known not to be
      * absolute, and <code>cwd</code> is assumed to be absolute.
      *
-     * @param cwd current working directory (of some {@link PySystemState})
+     * @param cwd  current working directory (of some {@link PySystemState})
      * @param path to resolve
      * @return specifier of the intended file
      */
@@ -650,7 +654,7 @@ public class PySystemState extends PyObject implements AutoCloseable,
                 return Character.toUpperCase(pathDrive);
             }
         }
-        return (char)0;
+        return (char) 0;
     }
 
     /**
@@ -707,7 +711,7 @@ public class PySystemState extends PyObject implements AutoCloseable,
     }
 
     private static String findRoot(Properties preProperties, Properties postProperties,
-            String jarFileName) {
+                                   String jarFileName) {
         String root = null;
         try {
             if (postProperties != null) {
@@ -772,7 +776,7 @@ public class PySystemState extends PyObject implements AutoCloseable,
     }
 
     private static void initRegistry(Properties preProperties, Properties postProperties,
-            boolean standalone, String jarFileName) {
+                                     boolean standalone, String jarFileName) {
         if (registry != null) {
             Py.writeError("systemState", "trying to reinitialize registry");
             return;
@@ -863,7 +867,7 @@ public class PySystemState extends PyObject implements AutoCloseable,
         try {
             Method encodingMethod = java.io.Console.class.getDeclaredMethod("encoding");
             encodingMethod.setAccessible(true); // private static method
-            encoding = (String)encodingMethod.invoke(Console.class);
+            encoding = (String) encodingMethod.invoke(Console.class);
         } catch (Exception e) {
             // ignore any exception
         }
@@ -917,21 +921,21 @@ public class PySystemState extends PyObject implements AutoCloseable,
     }
 
     public static synchronized void initialize(Properties preProperties, Properties postProperties) {
-        initialize(preProperties, postProperties, new String[] {""});
+        initialize(preProperties, postProperties, new String[]{""});
     }
 
     public static synchronized void initialize(Properties preProperties, Properties postProperties,
-            String[] argv) {
+                                               String[] argv) {
         initialize(preProperties, postProperties, argv, null);
     }
 
     public static synchronized void initialize(Properties preProperties, Properties postProperties,
-            String[] argv, ClassLoader classLoader) {
+                                               String[] argv, ClassLoader classLoader) {
         initialize(preProperties, postProperties, argv, classLoader, new ClassicPyObjectAdapter());
     }
 
     public static synchronized void initialize(Properties preProperties, Properties postProperties,
-            String[] argv, ClassLoader classLoader, ExtensiblePyObjectAdapter adapter) {
+                                               String[] argv, ClassLoader classLoader, ExtensiblePyObjectAdapter adapter) {
         if (initialized) {
             return;
         }
@@ -981,12 +985,12 @@ public class PySystemState extends PyObject implements AutoCloseable,
      * Attempts to read a SystemStateInitializer service from the given class loader, instantiate
      * it, and initialize with it.
      *
-     * @throws UnsupportedCharsetException if unable to load UTF-8 to read a service definition
      * @return true if a service is found and successfully initializes.
+     * @throws UnsupportedCharsetException if unable to load UTF-8 to read a service definition
      */
     private static boolean initialize(Properties pre, Properties post, String[] argv,
-            ClassLoader sysClassLoader, ExtensiblePyObjectAdapter adapter,
-            ClassLoader initializerClassLoader) {
+                                      ClassLoader sysClassLoader, ExtensiblePyObjectAdapter adapter,
+                                      ClassLoader initializerClassLoader) {
         InputStream in = initializerClassLoader.getResourceAsStream(INITIALIZER_SERVICE);
         if (in == null) {
             Py.writeDebug("initializer", "'" + INITIALIZER_SERVICE + "' not found on "
@@ -1012,7 +1016,7 @@ public class PySystemState extends PyObject implements AutoCloseable,
             return false;
         }
         try {
-            ((JythonInitializer)initializer.newInstance()).initialize(pre, post, argv,
+            ((JythonInitializer) initializer.newInstance()).initialize(pre, post, argv,
                     sysClassLoader, adapter);
         } catch (Exception e) {
             Py.writeWarning("initializer", "Failed initializing with class '" + className
@@ -1028,8 +1032,8 @@ public class PySystemState extends PyObject implements AutoCloseable,
     }
 
     public static synchronized PySystemState doInitialize(Properties preProperties,
-            Properties postProperties, String[] argv, ClassLoader classLoader,
-            ExtensiblePyObjectAdapter adapter) {
+                                                          Properties postProperties, String[] argv, ClassLoader classLoader,
+                                                          ExtensiblePyObjectAdapter adapter) {
         if (initialized) {
             return Py.defaultSystemState;
         }
@@ -1236,7 +1240,7 @@ public class PySystemState extends PyObject implements AutoCloseable,
      * why it didn't work.
      *
      * @param consoleName console class name we're trying to initialise
-     * @param msg specific cause of the failure
+     * @param msg         specific cause of the failure
      */
     private static void writeConsoleWarning(String consoleName, String msg) {
         Py.writeWarning("console", "Failed to install '" + consoleName + "': " + msg + ".");
@@ -1317,7 +1321,6 @@ public class PySystemState extends PyObject implements AutoCloseable,
      * Check if we are in standalone mode.
      *
      * @param jarFileName The name of the jar file
-     *
      * @return <code>true</code> if we have a standalone .jar file, <code>false</code> otherwise.
      */
     private static boolean isStandalone(String jarFileName) {
@@ -1345,7 +1348,7 @@ public class PySystemState extends PyObject implements AutoCloseable,
 
     /**
      * @return the full name of the jar file containing this class, <code>null</code> if not
-     *         available.
+     * available.
      */
     private static String getJarFileName() {
         Class<PySystemState> thisClass = PySystemState.class;
@@ -1353,6 +1356,94 @@ public class PySystemState extends PyObject implements AutoCloseable,
         String className = fullClassName.substring(fullClassName.lastIndexOf(".") + 1);
         URL url = thisClass.getResource(className + ".class");
         return getJarFileNameFromURL(url);
+    }
+
+    /**
+     * Extracts a jar file from another archive, and copy it into the java.io.tmpdir folder.
+     *
+     * @param archiveFile the archive file that contains the jar to extract
+     * @param path        the path of the jar to extract
+     * @return the path of the extracted jar file
+     */
+    private static String extractJarFromZip(File archiveFile, String path) {
+        File temporaryFile = null;
+        try {
+            if (archiveFile.exists()) {
+                ZipFile zipFile = new ZipFile(archiveFile);
+                ZipEntry entry = zipFile.getEntry(path.startsWith("/") ? path.substring(1) : path);
+                if (entry != null && entry.getName() != null) {
+                    String filename = entry.getName().substring(entry.getName().lastIndexOf("/") + 1);
+                    File file = new File(System.getProperty("java.io.tmpdir"), filename);
+                    temporaryFile = new File(System.getProperty("java.io.tmpdir"), filename + "_" + System.currentTimeMillis());
+                    Files.copy(
+                            zipFile.getInputStream(entry),
+                            Paths.get(temporaryFile.getCanonicalPath()),
+                            StandardCopyOption.REPLACE_EXISTING
+                    );
+                    if (!file.exists() || !(getMD5Checksum(file).equals(getMD5Checksum(temporaryFile)))) {
+                        if (file.exists()) {
+                            logger.info("The target file '" + file.getCanonicalPath() + "' already exists but " +
+                                    "is different than the expected one. Replacing it.");
+                        }
+                        Files.copy(
+                                zipFile.getInputStream(entry),
+                                Paths.get(file.getCanonicalPath()),
+                                StandardCopyOption.REPLACE_EXISTING
+                        );
+                        logger.info("The file '" + filename + "' has been extracted successfully. " +
+                                "Location: '" + file.getCanonicalPath() + "'");
+                        return file.getCanonicalPath();
+                    } else {
+                        logger.info("The file '" + file.getCanonicalPath() + "' already exists. " +
+                                "Don't recreate it.");
+                        return file.getCanonicalPath();
+                    }
+                } else {
+                    String message = "Can't find the entry '" + path + "' in " +
+                            "the file '" + archiveFile.getCanonicalPath() + "'";
+                    logger.warning(message);
+                    return null;
+                }
+            } else {
+                logger.warning("The file '" + archiveFile.getCanonicalPath() + "' doesn't not exist.");
+                return null;
+            }
+        } catch (Exception e) {
+            logger.severe(e.getMessage());
+            return null;
+        } finally {
+            if (temporaryFile != null && temporaryFile.exists()) {
+                temporaryFile.deleteOnExit();
+            }
+        }
+    }
+
+    private static byte[] createChecksum(File f) throws Exception {
+        InputStream fis =  new FileInputStream(f);
+
+        byte[] buffer = new byte[1024];
+        MessageDigest complete = MessageDigest.getInstance("MD5");
+        int numRead;
+
+        do {
+            numRead = fis.read(buffer);
+            if (numRead > 0) {
+                complete.update(buffer, 0, numRead);
+            }
+        } while (numRead != -1);
+
+        fis.close();
+        return complete.digest();
+    }
+
+    private static String getMD5Checksum(File f) throws Exception {
+        byte[] b = createChecksum(f);
+        String result = "";
+
+        for(int i=0; i < b.length; i++) {
+            result += Integer.toString( ( b[i] & 0xff ) + 0x100, 16).substring( 1 );
+        }
+        return result;
     }
 
     protected static String getJarFileNameFromURL(URL url) {
@@ -1369,7 +1460,20 @@ public class PySystemState extends PyObject implements AutoCloseable,
                 int jarSeparatorIndex = urlString.lastIndexOf(JAR_SEPARATOR);
                 if (urlString.startsWith(JAR_URL_PREFIX) && jarSeparatorIndex > 0) {
                     // jar:file:/install_dir/jython.jar!/org/python/core/PySystemState.class
-                    jarFileName = urlString.substring(JAR_URL_PREFIX.length(), jarSeparatorIndex);
+                    if (urlString.endsWith(".jar")) {
+                        jarFileName = extractJarFromZip(
+                                new File(urlString.substring(JAR_URL_PREFIX.length(), jarSeparatorIndex)),
+                                urlString.substring(jarSeparatorIndex + 1)
+                        );
+                    } else {
+                        jarFileName = urlString.substring(JAR_URL_PREFIX.length(), jarSeparatorIndex);
+                    }
+                } else if (urlString.startsWith("nested")) {
+                    // nested:MAVEN-INF/repository/org/python/jython/2.7.0/jython.jar!/org/python/core/PySystemState.class
+
+                    // PySystemState.class.getProtectionDomain().getCodeSource().getLocation() =
+                    // 'jar:file:/install_dir/root_jar.jar!/MAVEN-INF/repository/org/python/jythone/2.7.0/jython.jar'
+                    return getJarFileNameFromURL(PySystemState.class.getProtectionDomain().getCodeSource().getLocation());
                 } else if (urlString.startsWith(VFSZIP_PREFIX)) {
                     // vfszip:/some/path/jython.jar/org/python/core/PySystemState.class
                     final String path = PySystemState.class.getName().replace('.', '/');
@@ -1397,7 +1501,8 @@ public class PySystemState extends PyObject implements AutoCloseable,
                         jarFileName = urlString.substring(start, jarIndex);
                     }
                 }
-            } catch (Exception e) {}
+            } catch (Exception e) {
+            }
         }
         return jarFileName;
     }
@@ -1439,7 +1544,6 @@ public class PySystemState extends PyObject implements AutoCloseable,
      * jython by this call. See the note for add_classdir(dir) for more details.
      *
      * @param directoryPath The name of a directory.
-     *
      * @see #add_classdir
      */
     public static void add_extdir(String directoryPath) {
@@ -1454,8 +1558,7 @@ public class PySystemState extends PyObject implements AutoCloseable,
      * jython by this call. See the note for add_classdir(dir) for more details.
      *
      * @param directoryPath The name of a directory.
-     * @param cache Controls if the packages in the zip and jar file should be cached.
-     *
+     * @param cache         Controls if the packages in the zip and jar file should be cached.
      * @see #add_classdir
      */
     public static void add_extdir(String directoryPath, boolean cache) {
@@ -1487,8 +1590,8 @@ public class PySystemState extends PyObject implements AutoCloseable,
      * Exit a Python program with the given status.
      *
      * @param status the value to exit with
-     * @exception Py.SystemExit always throws this exception. When caught at top level the program
-     *                will exit.
+     * @throws Py.SystemExit always throws this exception. When caught at top level the program
+     *                       will exit.
      */
     public static void exit(PyObject status) {
         throw new PyException(Py.SystemExit, status);
@@ -1544,7 +1647,9 @@ public class PySystemState extends PyObject implements AutoCloseable,
         closer.cleanup();
     }
 
-    public void close() { cleanup(); }
+    public void close() {
+        cleanup();
+    }
 
     public static class PySystemStateCloser {
 
@@ -1608,6 +1713,7 @@ public class PySystemState extends PyObject implements AutoCloseable,
                 isCleanup = false;
             }
         }
+
         private void runClosers() {
             synchronized (PySystemStateCloser.class) {
                 // resourceClosers can be null in some strange cases
@@ -1810,14 +1916,14 @@ public class PySystemState extends PyObject implements AutoCloseable,
 
     @Override
     public boolean refersDirectlyTo(PyObject ob) {
-        return ob != null && (ob == argv || ob ==  modules || ob == path
-            || ob == warnoptions || ob == builtins || ob == platform
-            || ob == meta_path || ob == path_hooks || ob == path_importer_cache
-            || ob == ps1 || ob == ps2 || ob == executable || ob == stdout
-            || ob == stderr || ob == stdin || ob == __stdout__ || ob == __stderr__
-            || ob == __stdin__ || ob == __displayhook__ || ob == __excepthook__
-            || ob ==  last_value || ob == last_type || ob == last_traceback
-            || ob ==__name__ || ob == __dict__);
+        return ob != null && (ob == argv || ob == modules || ob == path
+                || ob == warnoptions || ob == builtins || ob == platform
+                || ob == meta_path || ob == path_hooks || ob == path_importer_cache
+                || ob == ps1 || ob == ps2 || ob == executable || ob == stdout
+                || ob == stderr || ob == stdin || ob == __stdout__ || ob == __stderr__
+                || ob == __stdin__ || ob == __displayhook__ || ob == __excepthook__
+                || ob == last_value || ob == last_type || ob == last_traceback
+                || ob == __name__ || ob == __dict__);
     }
 
 
@@ -1872,7 +1978,8 @@ class PyAttributeDeleted extends PyObject {
 
     final static PyAttributeDeleted INSTANCE = new PyAttributeDeleted();
 
-    private PyAttributeDeleted() {}
+    private PyAttributeDeleted() {
+    }
 
     @Override
     public String toString() {
@@ -2008,8 +2115,8 @@ class FloatInfo extends PyTuple {
     @Override
     public boolean refersDirectlyTo(PyObject ob) {
         return ob != null && (ob == max || ob == max_exp || ob == max_10_exp || ob == min
-            || ob == min_exp || ob == min_10_exp || ob == dig
-            || ob == mant_dig || ob == epsilon || ob == radix || ob == rounds);
+                || ob == min_exp || ob == min_10_exp || ob == dig
+                || ob == mant_dig || ob == epsilon || ob == radix || ob == rounds);
     }
 }
 
