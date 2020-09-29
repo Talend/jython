@@ -36,6 +36,7 @@ Once testing is done with the local jar you can move forward and publish the jar
 ```
 mvn deploy:deploy-file -DpomFile=release-pom.xml -Dfile=dist/jython-standalone.jar -Durl=https://artifacts-zl.talend.com/content/repositories/TalendOpenSourceRelease -DrepositoryId=TalendOpenSourceRelease
 ```
+If for some reason the above command is stuck, you can login to https://artifacts-zl.talend.com and upload the artifact manually.
 # Debugging
 If you encounter any `internal error: Can't get property indirectDelegates using method get/isIndirectDelegates from org.antlr.tool.Grammar instance` error during build please make sure to set `failonerror="false"` in `build.xml` in `antlr_gen` stage:
 ```
