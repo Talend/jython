@@ -1,20 +1,45 @@
-# Jython: Python for the Java Platform
-[![Maven Central](https://maven-badges.herokuapp.com/maven-central/org.python/jython-standalone/badge.svg)](https://search.maven.org/artifact/org.python/jython-standalone/) [![Javadocs](https://www.javadoc.io/badge/org.python/jython-standalone.svg)](https://www.javadoc.io/doc/org.python/jython-standalone)
+# Talend Jython fork
+* A Talend private fork of Jython from Jython's frozen mirror : https://github.com/jython/frozen-mirror
+* The library is used in the Python processor in cloud-components : https://github.com/Talend/cloud-components/blob/master/processing-beam/pom.xml
+* We had to do a fix to support nested URLs for one of our use cases : https://github.com/Talend/jython/pull/1
 
-This is the development repository of Jython. Along with language and runtime compatibility with CPython 2.7, Jython 2.7 provides substantial support of the Python ecosystem. This includes built-in support of *pip/setuptools* (you can use with `bin/pip`) and a native launcher for Windows (`bin/jython.exe`), with the implication that you can finally install Jython scripts on Windows.
-
-**Note that if you have `JYTHON_HOME` set, you should unset it to avoid problems with the installer and pip/setuptools.**
-
-Jim Baker presented a talk at PyCon 2015 about Jython 2.7, including demos of new features: https://www.youtube.com/watch?v=hLm3garVQFo
-
-The release was compiled on OSX using JDK 7 and requires a minimum of Java 7 to run.
-
-Please try this release out and report any bugs at http://bugs.jython.org
-
-You can test your installation of Jython (not the standalone jar) by running the regression tests, with the command:
+# How to build & release Jython
+## Test before releasing !
+In the project's root :
 ```
-jython -m test.regrtest -e -m regrtest_memo.txt
+ant clean
+ant test
 ```
-For Windows, there is a simple script to do this: `jython_regrtest.bat`. In either case, the memo file `regrtest_memo.txt` will be useful in the bug report if you see test failures. The regression tests can take about half an hour.
-
-See [ACKNOWLEDGMENTS](ACKNOWLEDGMENTS) for details about Jython's copyright, license, contributors, and mailing lists; and [NEWS](NEWS) for detailed release notes, including bugs fixed, backwards breaking changes, and new features. We sincerely thank all who contribute to Jython, including - but not limited to - bug reports, patches, pull requests, documentation changes, support emails, and fantastic conversation on Freenode at #jython. Join us there for your questions and answers!
+## Set release version
+Edit `maven/build.xml` and set `projet.version` to your release version :
+```
+<property name="project.version" value="2.7.0.2-talend"/>
+```
+## Build maven artifacts
+In the project's root :
+```
+ant -f maven/build.xml clean
+ant -f maven/build.xml
+```
+This will produce several maven artifacts in the `dist` folder.
+## Push Maven artifacts to Nexus
+Deploy the jar locally so that you can test it before publishing it to a real repo.
+First start by updating the `release-pom.xml` pom file to use the release version
+```
+<version>2.7.0.2-talend</version>
+```
+Then install the jar locally, from the project's root (and after building the maven artifacts of course !) :
+```
+mvn install:install-file -Dfile=dist/jython-standalone.jar -DpomFile=release-pom.xml
+```
+Once testing is done with the local jar you can move forward and publish the jar to our internal repo. :
+```
+mvn deploy:deploy-file -DpomFile=release-pom.xml -Dfile=dist/jython-standalone.jar -Durl=https://artifacts-zl.talend.com/content/repositories/TalendOpenSourceRelease -DrepositoryId=TalendOpenSourceRelease
+```
+If for some reason the above command is stuck, you can login to https://artifacts-zl.talend.com and upload the artifact manually.
+# Debugging
+If you encounter any `internal error: Can't get property indirectDelegates using method get/isIndirectDelegates from org.antlr.tool.Grammar instance` error during build please make sure to set `failonerror="false"` in `build.xml` in `antlr_gen` stage:
+```
+<target name="antlr_gen" depends="prepare-output" unless="antlr.notneeded">
+    <java classname="org.antlr.Tool" failonerror="false" fork="true" dir="${jython.base.dir}">
+```
